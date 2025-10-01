@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>بازی شوتینگ - شلیک و حرکت مجزا</title>
+    <title>بازی شوتینگ - نسخه نهایی</title>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
     <style>
         /* --- استایل‌های عمومی --- */
@@ -25,7 +25,12 @@
             flex-grow: 1; width: 100%; display: flex; justify-content: center; align-items: center;
         }
         #game-canvas {
-            border: 2px solid #ecf0f1; box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); touch-action: pan-x pan-y;
+            border: 2px solid #ecf0f1; 
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); 
+            touch-action: pan-x pan-y; /* جلوگیری از لمس تصادفی برای دوربین */
+            max-width: 95%; /* واکنش‌گرایی اولیه */
+            width: 800px; /* ابعاد پیش‌فرض برای دسکتاپ */
+            height: 600px;
         }
         .ui-section {
             display: flex; gap: 10px; justify-content: center; margin-top: 10px;
@@ -41,21 +46,22 @@
         #mobile-controls {
             position: absolute; bottom: 10px; z-index: 10;
             display: flex; justify-content: space-between; width: 95%; max-width: 600px;
-            /* توزیع جوی‌استیک‌ها */
             padding: 0 10px; 
             box-sizing: border-box;
         }
         .joystick {
             width: 80px; height: 80px; background-color: rgba(255, 255, 255, 0.2); border-radius: 50%;
             display: flex; justify-content: center; align-items: center; opacity: 0.8;
-            touch-action: none; 
+            touch-action: none; /* مهم: لمس فقط برای جوی استیک باشد */
         }
         .joystick-handle {
             width: 30px; height: 30px; background-color: rgba(255, 255, 255, 0.7); border-radius: 50%;
         }
         #shoot-button {
-            /* دکمه شلیک حذف شد و شلیک با رها کردن جوی‌استیک شلیک انجام می‌شود */
-            display: none; 
+            width: 80px; height: 80px; border-radius: 50%; background-color: #e74c3c; color: white;
+            font-size: 1.1em;
+            box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
+            line-height: 80px; text-align: center; font-weight: bold;
         }
         /* در دسکتاپ، کنترل‌های موبایل را مخفی کن */
         @media (min-width: 768px) {
@@ -92,7 +98,7 @@
     </div>
 
     <div id="game-area">
-        <canvas id="game-canvas" width="800" height="600"></canvas>
+        <canvas id="game-canvas"></canvas>
     </div>
     
     <div id="mobile-controls">
@@ -100,40 +106,44 @@
             <div class="joystick-handle"></div>
         </div>
         
-        <div class="joystick" id="aim-joystick">
-            <div class="joystick-handle"></div>
-        </div>
+        <button id="shoot-button">شلیک</button>
     </div>
 
     <script>
-        // --- متغیرهای DOM ---
+        // --- متغیرهای DOM و تنظیمات ---
         const myIdElement = document.getElementById('my-id');
         const statusElement = document.getElementById('status');
-        const hostButton = document.getElementById('host-button');
-        const joinButton = document.getElementById('join-button');
-        const joinIdInput = document.getElementById('join-id-input');
         const uiContainer = document.getElementById('ui-container');
         const canvas = document.getElementById('game-canvas');
         const ctx = canvas.getContext('2d');
         const moveJoystick = document.getElementById('move-joystick');
-        const aimJoystick = document.getElementById('aim-joystick'); // جوی‌استیک جدید هدف‌گیری
+        const shootButton = document.getElementById('shoot-button');
+        const hostButton = document.getElementById('host-button');
+        const joinButton = document.getElementById('join-button');
+        const joinIdInput = document.getElementById('join-id-input');
+        const connectMoreButton = document.getElementById('connect-more-button');
+        const peerIdInput2 = document.getElementById('peer-id-input-2');
+        const peerIdInput3 = document.getElementById('peer-id-input-3');
+        const gameInfoDiv = document.getElementById('game-info');
+        const connectionSetupDiv = document.getElementById('connection-setup');
         
-        // --- تنظیمات بازی و ثابت‌ها ---
+        // --- ثابت‌ها ---
         const LARGE_MAP_WIDTH = 4000;
         const LARGE_MAP_HEIGHT = 3000;
         const PLAYER_SIZE = 60;
         const PLAYER_SPEED = 8;
         const DAMAGE_AMOUNT = 20;
-        const BULLET_SPEED = 20; // سرعت تیر سریع‌تر
+        const BULLET_SPEED = 20;
+        const AIM_LINE_LENGTH = 50;
         
+        // --- وضعیت بازی ---
         let peerConnections = {}; 
         let myId = null;
         let players = {'my_id': { x: 500, y: 500, angle: 0, aimAngle: 0, width: PLAYER_SIZE, height: PLAYER_SIZE, health: 100, color: 'blue' }};
         let bullets = []; 
         let keysPressed = {}; 
-        let viewport = { x: 0, y: 0, width: 800, height: 600 }; 
+        let viewport = { x: 0, y: 0, width: 0, height: 0 }; 
         let moveJoystickDirection = { x: 0, y: 0 };
-        let aimJoystickDirection = { x: 0, y: 0 }; // جهت‌گیری جوی‌استیک هدف‌گیری
         let gameStarted = false; 
 
         // --- بارگذاری تصاویر ---
@@ -146,7 +156,8 @@
             if (peer.open) gameLoop();
         };
 
-        // --- A. منطق PeerJS و اتصال (کامل شده) ---
+        // --- A. منطق PeerJS و اتصال ---
+
         const peer = new Peer();
 
         peer.on('open', (id) => {
@@ -156,6 +167,7 @@
             resizeCanvas();
             if (imagesLoaded) gameLoop();
         });
+        
         peer.on('connection', (conn) => { 
             statusElement.textContent = `بازیکنی با ID ${conn.peer.substring(0, 4)} به بازی پیوست.`;
             setupConnection(conn); 
@@ -171,11 +183,11 @@
         }
 
         hostButton.addEventListener('click', () => {
-            document.getElementById('my-id').textContent = myId;
+            myIdElement.textContent = myId;
             statusElement.textContent = `بازی شما با کد ${myId} ساخته شد. منتظر بازیکنان باشید.`;
-            document.getElementById('connection-setup').classList.add('hidden');
-            document.getElementById('game-info').style.display = 'block';
-            startGameUI();
+            connectionSetupDiv.classList.add('hidden');
+            gameInfoDiv.style.display = 'block';
+            // نیازی نیست فورا UI مخفی شود، منتظر بازیکن هستیم.
         });
 
         joinButton.addEventListener('click', () => {
@@ -187,13 +199,10 @@
                     setupConnection(conn);
                     startGameUI();
                 });
-                conn.on('error', (err) => { statusElement.textContent = 'خطا در اتصال.'; });
+                conn.on('error', (err) => { statusElement.textContent = 'خطا در اتصال: ID اشتباه یا بازی موجود نیست.'; });
             }
         });
 
-        const connectMoreButton = document.getElementById('connect-more-button');
-        const peerIdInput2 = document.getElementById('peer-id-input-2');
-        const peerIdInput3 = document.getElementById('peer-id-input-3');
         connectMoreButton.addEventListener('click', () => {
             [peerIdInput2.value, peerIdInput3.value].filter(id => id).forEach(peerId => {
                 if (peerId && !peerConnections[peerId]) {
@@ -212,19 +221,28 @@
                     color: (Object.keys(players).length % 2 === 0) ? '#e67e22' : '#9b59b6'
                 };
             }
+
             conn.on('data', (data) => {
                 const remotePlayer = players[conn.peer]; 
                 if (!remotePlayer) return;
                 switch(data.type) {
-                    case 'position': remotePlayer.x = data.x; remotePlayer.y = data.y; remotePlayer.angle = data.angle; remotePlayer.aimAngle = data.aimAngle; break;
-                    case 'shoot': bullets.push({ x: data.x, y: data.y, angle: data.angle, ownerId: conn.peer }); break;
+                    case 'position': 
+                        remotePlayer.x = data.x; remotePlayer.y = data.y; 
+                        remotePlayer.angle = data.angle; remotePlayer.aimAngle = data.aimAngle; 
+                        break;
+                    case 'shoot': 
+                        bullets.push({ x: data.x, y: data.y, angle: data.angle, ownerId: conn.peer }); 
+                        break;
                     case 'damage': 
                         if (data.targetId === myId) { 
                             players['my_id'].health -= data.amount; 
                             if (players['my_id'].health <= 0) players['my_id'].health = 0; 
                             broadcastData({ type: 'health_update', id: myId, health: players['my_id'].health });
-                        } break;
-                    case 'health_update': if (remotePlayer.id === data.id) remotePlayer.health = data.health; break;
+                        } 
+                        break;
+                    case 'health_update': 
+                        if (remotePlayer.id === data.id) remotePlayer.health = data.health; 
+                        break;
                 }
             });
             conn.on('close', () => { delete peerConnections[conn.peer]; delete players[conn.peer]; });
@@ -236,63 +254,96 @@
             Object.values(peerConnections).forEach(conn => { conn.send(data); });
         }
 
-
-        // --- B. تنظیمات صفحه و کنترل ---
+        // --- B. تنظیمات صفحه و واکنش‌گرایی ---
 
         function resizeCanvas() {
             const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
+            const gameArea = document.getElementById('game-area');
+            
             if (isFullscreen) {
+                // حالت تمام صفحه
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
             } else {
-                canvas.width = 800;
-                canvas.height = 600;
+                 // حالت عادی: واکنش‌گرا و کوچک
+                const controlsHeight = document.getElementById('mobile-controls').offsetHeight + 20;
+                const uiHeight = uiContainer.offsetHeight;
+                
+                // ارتفاع و عرض قابل استفاده
+                const availableH = window.innerHeight - uiHeight - controlsHeight;
+                const availableW = window.innerWidth;
+
+                // نسبت استاندارد (مثلا 4:3 یا 16:9) را می‌توان در اینجا اعمال کرد.
+                // فعلا به ابعاد موجود محدود می‌کنیم.
+                const targetW = Math.min(availableW * 0.95, 800);
+                const targetH = Math.min(availableH * 0.95, 600);
+                
+                // حفظ نسبت تصویر (مثلاً 4:3)
+                const ratio = 4 / 3;
+                let finalW = targetW;
+                let finalH = finalW / ratio;
+
+                if (finalH > targetH) {
+                    finalH = targetH;
+                    finalW = finalH * ratio;
+                }
+
+                canvas.width = finalW;
+                canvas.height = finalH;
             }
+            
             viewport.width = canvas.width;
             viewport.height = canvas.height;
         }
+        
         window.addEventListener('resize', resizeCanvas);
         document.addEventListener('fullscreenchange', resizeCanvas);
-
         document.getElementById('fullscreen-btn').addEventListener('click', () => {
-            if (!document.fullscreenElement) canvas.requestFullscreen().catch(err => {
+             if (!document.fullscreenElement) canvas.requestFullscreen().catch(err => {
                  alert(`خطا در تمام صفحه: ${err.message}`);
             });
             else document.exitFullscreen();
         });
         
-        // --- شلیک و هدف‌گیری (Aiming & Shooting) ---
+        // --- شلیک و هدف‌گیری ---
 
-        function fireBullet(player, angle) {
+        function fireBullet(player) {
             if (player.health <= 0) return;
             
-            // شلیک از مرکز player
             const bullet = { 
                 x: player.x + player.width / 2,
                 y: player.y + player.height / 2,
-                angle: angle, // از زاویه هدف‌گیری استفاده می‌شود
+                angle: player.aimAngle, 
                 ownerId: player.id 
             };
             bullets.push(bullet);
             broadcastData({ type: 'shoot', x: bullet.x, y: bullet.y, angle: bullet.angle });
         }
         
+        // دکمه شلیک برای موبایل
+        shootButton.addEventListener('click', () => { fireBullet(players['my_id']); });
+        
         // دسکتاپ: ماوس برای جهت‌گیری و شلیک با کلیک
         canvas.addEventListener('mousemove', (event) => {
             const player = players['my_id'];
             if (player.health <= 0) return;
-            const angle = Math.atan2(event.clientY - viewport.height / 2, event.clientX - viewport.width / 2);
-            player.aimAngle = angle; // فقط زاویه هدف‌گیری را تغییر می‌دهد
+            // موقعیت ماوس نسبت به مرکز viewport
+            const rect = canvas.getBoundingClientRect();
+            const angle = Math.atan2((event.clientY - rect.top) - rect.height / 2, (event.clientX - rect.left) - rect.width / 2);
+            player.aimAngle = angle; 
             broadcastData({ type: 'position', x: player.x, y: player.y, angle: player.angle, aimAngle: player.aimAngle });
         });
 
-        canvas.addEventListener('click', (event) => { fireBullet(players['my_id'], players['my_id'].aimAngle); });
+        canvas.addEventListener('click', (event) => { 
+            // در دسکتاپ، کلیک هم جهت‌گیری را مشخص می‌کند و هم شلیک را.
+            fireBullet(players['my_id']); 
+        });
         
         // --- کنترل‌های ورودی (حرکت کیبورد) ---
         document.addEventListener('keydown', (event) => { keysPressed[event.key.toLowerCase()] = true; });
         document.addEventListener('keyup', (event) => { delete keysPressed[event.key.toLowerCase()]; });
 
-        // --- کنترل‌های ورودی (Joystick حرکت - سمت چپ) ---
+        // --- کنترل‌های ورودی (Joystick حرکت) ---
         moveJoystick.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
         moveJoystick.addEventListener('touchmove', (e) => {
             e.preventDefault();
@@ -308,51 +359,19 @@
             moveJoystickDirection.x = dx / maxDistance;
             moveJoystickDirection.y = dy / maxDistance;
             moveJoystick.querySelector('.joystick-handle').style.transform = `translate(${dx}px, ${dy}px)`;
+
+            // **تنظیم aimAngle بر اساس جهت حرکت در موبایل**
+            const player = players['my_id'];
+            if (distance > 0.1) {
+                player.aimAngle = Math.atan2(dy, dx); // هدف‌گیری = جهت حرکت
+            }
+
         }, { passive: false });
 
         moveJoystick.addEventListener('touchend', (e) => {
             moveJoystickDirection = { x: 0, y: 0 };
             moveJoystick.querySelector('.joystick-handle').style.transform = `translate(0px, 0px)`;
         });
-
-        // --- کنترل‌های ورودی (Joystick هدف‌گیری - سمت راست) ---
-        
-        aimJoystick.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
-        aimJoystick.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            const touch = e.touches[0];
-            const rect = aimJoystick.getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            let dx = touch.clientX - centerX;
-            let dy = touch.clientY - centerY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            const maxDistance = rect.width / 2;
-            if (distance > maxDistance) { dx *= maxDistance / distance; dy *= maxDistance / distance; }
-            aimJoystickDirection.x = dx / maxDistance;
-            aimJoystickDirection.y = dy / maxDistance;
-            aimJoystick.querySelector('.joystick-handle').style.transform = `translate(${dx}px, ${dy}px)`;
-            
-            // **تنظیم زاویه هدف‌گیری بازیکن (aimAngle)**
-            const player = players['my_id'];
-            if (distance > 0.1) { // فقط اگر جوی‌استیک کمی حرکت کرده
-                player.aimAngle = Math.atan2(dy, dx);
-            }
-            broadcastData({ type: 'position', x: player.x, y: player.y, angle: player.angle, aimAngle: player.aimAngle });
-
-        }, { passive: false });
-
-        // **شلیک با رها کردن جوی‌استیک هدف‌گیری**
-        aimJoystick.addEventListener('touchend', (e) => {
-            const player = players['my_id'];
-            if (Math.abs(aimJoystickDirection.x) > 0.1 || Math.abs(aimJoystickDirection.y) > 0.1) {
-                 // اگر جوی‌استیک با شدت کافی رها شده، شلیک کن
-                fireBullet(player, player.aimAngle);
-            }
-            aimJoystickDirection = { x: 0, y: 0 };
-            aimJoystick.querySelector('.joystick-handle').style.transform = `translate(0px, 0px)`;
-        });
-
 
         // --- C. منطق بازی (Game Logic) ---
 
@@ -364,13 +383,13 @@
             let deltaX = 0;
             let deltaY = 0;
 
-            // 1. حرکت کیبورد
+            // حرکت کیبورد
             if (keysPressed['w'] || keysPressed['ش']) deltaY -= PLAYER_SPEED;
             if (keysPressed['s'] || keysPressed['س']) deltaY += PLAYER_SPEED;
             if (keysPressed['a'] || keysPressed['ا']) deltaX -= PLAYER_SPEED;
             if (keysPressed['d'] || keysPressed['ی']) deltaX += PLAYER_SPEED;
             
-            // 2. حرکت جوی‌استیک
+            // حرکت جوی‌استیک
             if (moveJoystickDirection.x !== 0 || moveJoystickDirection.y !== 0) {
                 deltaX += moveJoystickDirection.x * PLAYER_SPEED;
                 deltaY += moveJoystickDirection.y * PLAYER_SPEED;
@@ -381,12 +400,11 @@
                 player.y += deltaY;
                 moved = true;
                 
-                // **تنظیم زاویه نگاه (angle) بر اساس حرکت**
-                // اگر از جوی استیک یا کیبورد استفاده می‌شود، جهت نگاه را به جهت حرکت تنظیم کن
-                const moveAngle = Math.atan2(deltaY, deltaX);
-                player.angle = moveAngle;
+                // **زاویه نگاه (angle) بر اساس حرکت**
+                player.angle = Math.atan2(deltaY, deltaX);
             }
             
+            // محدود کردن حرکت در مپ
             player.x = Math.max(0, Math.min(LARGE_MAP_WIDTH - player.width, player.x));
             player.y = Math.max(0, Math.min(LARGE_MAP_HEIGHT - player.height, player.y));
 
@@ -409,7 +427,7 @@
                 bullet.x += Math.cos(bullet.angle) * BULLET_SPEED;
                 bullet.y += Math.sin(bullet.angle) * BULLET_SPEED;
                 
-                // بررسی برخورد
+                // بررسی برخورد (Collision Detection)
                 for (const id in players) {
                     if (id !== bullet.ownerId && players[id].health > 0) { 
                         const target = players[id];
@@ -424,7 +442,6 @@
                     }
                 }
                 
-                // بررسی خروج از نقشه
                 return bullet.x > 0 && bullet.x < LARGE_MAP_WIDTH && bullet.y > 0 && bullet.y < LARGE_MAP_HEIGHT;
             });
         }
@@ -450,7 +467,6 @@
                 }
             }
             
-            // ترسیم مرزهای نقشه
             ctx.strokeStyle = '#e74c3c'; 
             ctx.lineWidth = 10;
             const mapScreenX = 0 - viewport.x;
@@ -467,26 +483,26 @@
             if (screenX < -PLAYER_SIZE || screenX > viewport.width || screenY < -PLAYER_SIZE || screenY > viewport.height) return;
 
             if (player.health > 0) {
-                // ترسیم اسکین با چرخش برای جهت نگاه (angle)
+                // 1. ترسیم اسکین با چرخش برای جهت نگاه (angle)
                 ctx.save();
                 ctx.translate(centerX, centerY);
                 ctx.rotate(player.angle);
                 ctx.drawImage(skinImg, -player.width / 2, -player.height / 2, player.width, player.height);
                 ctx.restore();
                 
-                // **نمایش جهت هدف‌گیری (aimAngle) به شکل → **
+                // 2. نمایش جهت هدف‌گیری (aimAngle) به شکل → 
                 ctx.strokeStyle = 'yellow';
                 ctx.lineWidth = 3;
+                
+                // خط جهت‌گیری
                 ctx.beginPath();
-                // شروع از مرکز
                 ctx.moveTo(centerX, centerY);
-                // پایان در فاصله 50 پیکسل در جهت aimAngle
-                const aimX = centerX + Math.cos(player.aimAngle) * 50;
-                const aimY = centerY + Math.sin(player.aimAngle) * 50;
+                const aimX = centerX + Math.cos(player.aimAngle) * AIM_LINE_LENGTH;
+                const aimY = centerY + Math.sin(player.aimAngle) * AIM_LINE_LENGTH;
                 ctx.lineTo(aimX, aimY);
                 ctx.stroke();
 
-                // ترسیم پیکان (→)
+                // پیکان (دایره)
                 ctx.fillStyle = 'yellow';
                 ctx.beginPath();
                 ctx.arc(aimX, aimY, 5, 0, Math.PI * 2); 
@@ -503,7 +519,7 @@
                 ctx.stroke();
             }
             
-            // ترسیم نوار سلامتی و ID بازیکن
+            // 3. ترسیم نوار سلامتی و ID بازیکن
             const healthBarWidth = 50;
             const healthBarHeight = 5;
             const healthPercent = player.health / 100;
@@ -519,12 +535,12 @@
         }
 
         function drawBullets() {
-             ctx.fillStyle = 'red'; // تیرها را قرمز می‌کنم تا شبیه به → باشند
+             ctx.fillStyle = 'yellow'; 
              bullets.forEach(bullet => {
                  const screenX = bullet.x - viewport.x;
                  const screenY = bullet.y - viewport.y;
 
-                 // شبیه‌سازی تیر به شکل مستطیل (→) به جای دایره
+                 // ترسیم تیر به شکل مستطیل (شبیه به →)
                  ctx.save();
                  ctx.translate(screenX, screenY);
                  ctx.rotate(bullet.angle);
