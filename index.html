@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>بازی شوتینگ آنلاین - نسخه نهایی</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            font-family: Tahoma, sans-serif;
+            text-align: center;
+            background-color: #2c3e50;
+            margin: 0;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #ui-container {
+            padding: 20px;
+            background-color: #34495e;
+            width: 100%;
+            box-sizing: border-box;
+            color: white;
+            z-index: 100;
+        }
+        #game-area {
+            flex-grow: 1;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #game-canvas {
+            border: 2px solid #ecf0f1;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            touch-action: none;
+        }
+        .ui-section {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #2ecc71; }
+        input { padding: 10px; border: 1px solid #bdc3c7; border-radius: 5px; text-align: center; }
+        #my-id { font-size: 1.2em; color: #f1c40f; }
+        #fullscreen-btn { position: absolute; top: 10px; right: 10px; z-index: 200; padding: 10px; background-color: #e74c3c; }
+        #mobile-controls {
+            position: absolute; bottom: 20px; left: 20px; z-index: 10;
+        }
+        /* Mobile Joystick Styles */
+        .joystick {
+            width: 100px; height: 100px; background-color: rgba(255, 255, 255, 0.2); border-radius: 50%;
+            display: flex; justify-content: center; align-items: center; opacity: 0.8;
+        }
+        .joystick-handle {
+            width: 40px; height: 40px; background-color: rgba(255, 255, 255, 0.7); border-radius: 50%;
+            transform: translate(0px, 0px); /* برای حرکت دسته */
+        }
+    </style>
+</head>
+<body>
+
+    <button id="fullscreen-btn">تمام صفحه</button>
+    
+    <div id="ui-container">
+        <h1>بازی شوتینگ آنلاین</h1>
+        <p id="status">در حال دریافت شناسه (ID)...</p>
+        
+        <div id="connection-setup">
+            <button id="host-button">ساخت بازی (نمایش کد)</button>
+            <div class="ui-section">
+                <input type="text" id="join-id-input" placeholder="کد بازی (ID حریف) را وارد کنید">
+                <button id="join-button">پیوستن به بازی</button>
+            </div>
+        </div>
+        
+        <div id="game-info" style="display:none; margin-top:15px;">
+            <p>کد بازی شما: <span id="my-id">...</span></p>
+            <p>ID حریفان دیگر (اختیاری):</p>
+            <div class="ui-section">
+                <input type="text" id="peer-id-input-2" placeholder="ID حریف ۲">
+                <input type="text" id="peer-id-input-3" placeholder="ID حریف ۳">
+                <button id="connect-more-button">اتصال به این حریفان</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="game-area">
+        <canvas id="game-canvas"></canvas>
+    </div>
+    
+    <div id="mobile-controls">
+        <div class="joystick" id="move-joystick">
+            <div class="joystick-handle"></div>
+        </div>
+        </div>
+
+    <script>
+        // --- متغیرهای UI و DOM ---
+        const myIdElement = document.getElementById('my-id');
+        const statusElement = document.getElementById('status');
+        const hostButton = document.getElementById('host-button');
+        const joinButton = document.getElementById('join-button');
+        const joinIdInput = document.getElementById('join-id-input');
+        const gameInfoDiv = document.getElementById('game-info');
+        const connectionSetupDiv = document.getElementById('connection-setup');
+        const connectMoreButton = document.getElementById('connect-more-button');
+        const peerIdInput2 = document.getElementById('peer-id-input-2');
+        const peerIdInput3 = document.getElementById('peer-id-input-3');
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const moveJoystick = document.getElementById('move-joystick');
+        
+        // --- تنظیمات بازی و ثابت‌ها ---
+        const LARGE_MAP_WIDTH = 4000;
+        const LARGE_MAP_HEIGHT = 3000;
+        const PLAYER_SIZE = 60;
+        const PLAYER_SPEED = 8; // سرعت کمی بیشتر برای حس بهتر
+        const DAMAGE_AMOUNT = 20;
+        const BULLET_SPEED = 18;
+        const GUN_OFFSET = 15;
+        
+        let peerConnections = {}; 
+        let myId = null;
+        let players = {'my_id': { x: 500, y: 500, angle: 0, width: PLAYER_SIZE, height: PLAYER_SIZE, health: 100, color: 'blue' }};
+        let bullets = []; 
+        let keysPressed = {}; 
+        let viewport = { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+        let joystickActive = false;
+        let joystickDirection = { x: 0, y: 0 };
+
+        // --- بارگذاری تصاویر ---
+        const playerImage = new Image();
+        playerImage.src = 'https://s6.uupload.ir/files/inshot_۲۰۲۵۱۰۰۳_۱۴۲۹۵۳۲۹۳_57e2.png';
+        const gunImage = new Image();
+        gunImage.src = 'https://s6.uupload.ir/files/inshot_۲۰۲۵۱۰۰۳_۱۴۲۹۳۸۲۴۵_kr1c.png';
+        
+        let imagesLoaded = false;
+        let imagesToLoad = 2;
+        playerImage.onload = gunImage.onload = () => {
+            imagesToLoad--;
+            if (imagesToLoad === 0) {
+                imagesLoaded = true;
+                if (peer.open) gameLoop();
+            }
+        };
+
+        // --- A. منطق PeerJS و اتصال ---
+
+        const peer = new Peer();
+
+        peer.on('open', (id) => {
+            myId = id;
+            players['my_id'].id = id;
+            statusElement.textContent = 'آماده به کار. ID شما دریافت شد.';
+            resizeCanvas();
+            if (imagesLoaded) gameLoop();
+        });
+        
+        peer.on('connection', (conn) => { 
+            statusElement.textContent = `بازیکنی با ID ${conn.peer.substring(0, 4)} به بازی پیوست.`;
+            setupConnection(conn); 
+        });
+
+        hostButton.addEventListener('click', () => {
+            myIdElement.textContent = myId;
+            statusElement.textContent = `بازی شما با کد ${myId} ساخته شد. منتظر بازیکنان باشید.`;
+            connectionSetupDiv.style.display = 'none';
+            gameInfoDiv.style.display = 'block';
+        });
+
+        joinButton.addEventListener('click', () => {
+            const peerId = joinIdInput.value.trim();
+            if (peerId && peerId !== myId) {
+                const conn = peer.connect(peerId);
+                conn.on('open', () => {
+                    statusElement.textContent = `به بازی ${peerId.substring(0, 4)} متصل شدید!`;
+                    setupConnection(conn);
+                    connectionSetupDiv.style.display = 'none';
+                    gameInfoDiv.style.display = 'block';
+                    myIdElement.textContent = myId;
+                });
+                conn.on('error', (err) => {
+                    statusElement.textContent = 'خطا در اتصال: ID اشتباه یا بازی موجود نیست.';
+                });
+            } else {
+                statusElement.textContent = 'لطفاً کد معتبری وارد کنید.';
+            }
+        });
+        
+        connectMoreButton.addEventListener('click', () => {
+            [peerIdInput2.value, peerIdInput3.value].filter(id => id).forEach(peerId => {
+                if (peerId && !peerConnections[peerId]) {
+                    const conn = peer.connect(peerId);
+                    conn.on('open', () => { setupConnection(conn); });
+                }
+            });
+            statusElement.textContent = 'در حال تلاش برای اتصال به IDهای وارد شده...';
+        });
+
+        function setupConnection(conn) {
+            peerConnections[conn.peer] = conn;
+            if (!players[conn.peer]) {
+                players[conn.peer] = { 
+                    x: Math.random() * LARGE_MAP_WIDTH, y: Math.random() * LARGE_MAP_HEIGHT, 
+                    angle: 0, width: PLAYER_SIZE, height: PLAYER_SIZE, health: 100, id: conn.peer, 
+                    color: (Object.keys(players).length % 2 === 0) ? '#e67e22' : '#9b59b6'
+                };
+            }
+
+            conn.on('data', (data) => {
+                const remotePlayer = players[conn.peer]; 
+                if (!remotePlayer) return;
+
+                switch(data.type) {
+                    case 'position':
+                        remotePlayer.x = data.x;
+                        remotePlayer.y = data.y;
+                        remotePlayer.angle = data.angle;
+                        break;
+                    case 'shoot':
+                        bullets.push({
+                            x: data.x, y: data.y, angle: data.angle,
+                            ownerId: conn.peer
+                        });
+                        break;
+                    case 'damage': 
+                        if (data.targetId === myId) {
+                            players['my_id'].health -= data.amount;
+                            if (players['my_id'].health <= 0) { players['my_id'].health = 0; }
+                            broadcastData({ type: 'health_update', id: myId, health: players['my_id'].health });
+                        }
+                        break;
+                    case 'health_update':
+                        if (remotePlayer.id === data.id) { remotePlayer.health = data.health; }
+                        break;
+                }
+            });
+
+            conn.on('close', () => {
+                delete peerConnections[conn.peer];
+                delete players[conn.peer];
+                statusElement.textContent = `اتصال به ${conn.peer} قطع شد.`;
+            });
+            
+            // ارسال وضعیت فعلی شما به بازیکن جدید
+            conn.send({ type: 'health_update', id: myId, health: players['my_id'].health });
+            conn.send({ type: 'position', x: players['my_id'].x, y: players['my_id'].y, angle: players['my_id'].angle });
+        }
+        
+        function broadcastData(data) {
+            Object.values(peerConnections).forEach(conn => { conn.send(data); });
+        }
+
+        // --- B. تنظیمات صفحه و کنترل ---
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            viewport.width = canvas.width;
+            viewport.height = canvas.height;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        document.getElementById('fullscreen-btn').addEventListener('click', () => {
+            if (!document.fullscreenElement) canvas.requestFullscreen();
+            else document.exitFullscreen();
+        });
+        
+        // --- کنترل‌های ورودی (دسکتاپ) ---
+        document.addEventListener('keydown', (event) => { keysPressed[event.key.toLowerCase()] = true; });
+        document.addEventListener('keyup', (event) => { delete keysPressed[event.key.toLowerCase()]; });
+
+        canvas.addEventListener('mousemove', (event) => {
+            const player = players['my_id'];
+            if (player.health <= 0) return;
+            const angle = Math.atan2(event.clientY - viewport.height / 2, event.clientX - viewport.width / 2);
+            player.angle = angle;
+            broadcastData({ type: 'position', x: player.x, y: player.y, angle: player.angle });
+        });
+        
+        canvas.addEventListener('click', (event) => {
+            const player = players['my_id'];
+            if (player.health <= 0) return;
+            
+            // شلیک از مرکز player + offset تفنگ
+            const bullet = { 
+                x: player.x + player.width / 2 + Math.cos(player.angle) * (player.width / 2 + 10),
+                y: player.y + player.height / 2 + Math.sin(player.angle) * (player.height / 2 + 10),
+                angle: player.angle, 
+                ownerId: player.id 
+            };
+            bullets.push(bullet);
+
+            broadcastData({ type: 'shoot', x: bullet.x, y: bullet.y, angle: bullet.angle });
+        });
+        
+        // --- کنترل‌های ورودی (موبایل - Joystick) ---
+        
+        moveJoystick.addEventListener('touchstart', (e) => { e.preventDefault(); joystickActive = true; }, { passive: false });
+        moveJoystick.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (!joystickActive) return;
+            
+            const touch = e.touches[0];
+            const rect = moveJoystick.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            let dx = touch.clientX - centerX;
+            let dy = touch.clientY - centerY;
+            
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const maxDistance = rect.width / 2;
+
+            if (distance > maxDistance) {
+                dx *= maxDistance / distance;
+                dy *= maxDistance / distance;
+            }
+            
+            joystickDirection.x = dx / maxDistance;
+            joystickDirection.y = dy / maxDistance;
+            
+            moveJoystick.querySelector('.joystick-handle').style.transform = `translate(${dx}px, ${dy}px)`;
+            
+            // هدف‌گیری در موبایل: بهتر است با لمس سمت راست صفحه انجام شود
+        }, { passive: false });
+
+        moveJoystick.addEventListener('touchend', (e) => {
+            joystickActive = false;
+            joystickDirection = { x: 0, y: 0 };
+            moveJoystick.querySelector('.joystick-handle').style.transform = `translate(0px, 0px)`;
+        });
+
+        // --- C. منطق بازی (Game Logic) ---
+
+        function handleMovement() {
+            let moved = false;
+            const player = players['my_id'];
+            if (player.health <= 0) return;
+            
+            let deltaX = 0;
+            let deltaY = 0;
+
+            // 1. حرکت کیبورد
+            if (keysPressed['w'] || keysPressed['ش']) deltaY -= PLAYER_SPEED;
+            if (keysPressed['s'] || keysPressed['س']) deltaY += PLAYER_SPEED;
+            if (keysPressed['a'] || keysPressed['ا']) deltaX -= PLAYER_SPEED;
+            if (keysPressed['d'] || keysPressed['ی']) deltaX += PLAYER_SPEED;
+            
+            // 2. حرکت جوی‌استیک
+            if (joystickActive) {
+                deltaX += joystickDirection.x * PLAYER_SPEED;
+                deltaY += joystickDirection.y * PLAYER_SPEED;
+            }
+            
+            if (deltaX !== 0 || deltaY !== 0) {
+                player.x += deltaX;
+                player.y += deltaY;
+                moved = true;
+            }
+            
+            player.x = Math.max(0, Math.min(LARGE_MAP_WIDTH - player.width, player.x));
+            player.y = Math.max(0, Math.min(LARGE_MAP_HEIGHT - player.height, player.y));
+
+            if (moved) {
+                broadcastData({ type: 'position', x: player.x, y: player.y, angle: player.angle });
+            }
+        }
+        
+        function updateViewport() {
+            const player = players['my_id'];
+            viewport.x = player.x - viewport.width / 2 + player.width / 2;
+            viewport.y = player.y - viewport.height / 2 + player.height / 2;
+
+            viewport.x = Math.max(0, Math.min(viewport.x, LARGE_MAP_WIDTH - viewport.width));
+            viewport.y = Math.max(0, Math.min(viewport.y, LARGE_MAP_HEIGHT - viewport.height));
+        }
+
+        function updateBullets() {
+            bullets = bullets.filter(bullet => {
+                bullet.x += Math.cos(bullet.angle) * BULLET_SPEED;
+                bullet.y += Math.sin(bullet.angle) * BULLET_SPEED;
+                
+                // بررسی برخورد (Collision Detection)
+                for (const id in players) {
+                    if (id !== bullet.ownerId && players[id].health > 0) { 
+                        const target = players[id];
+                        // بررسی ساده AABB
+                        if (bullet.x > target.x && bullet.x < target.x + target.width &&
+                            bullet.y > target.y && bullet.y < target.y + target.height) {
+                            
+                            if (bullet.ownerId === myId) {
+                                broadcastData({ type: 'damage', targetId: target.id, amount: DAMAGE_AMOUNT });
+                            }
+                            return false; // حذف گلوله
+                        }
+                    }
+                }
+                
+                // بررسی خروج از نقشه
+                return bullet.x > 0 && bullet.x < LARGE_MAP_WIDTH && bullet.y > 0 && bullet.y < LARGE_MAP_HEIGHT;
+            });
+        }
+
+
+        // --- D. ترسیم (Drawing) ---
+
+        function drawBackground() {
+            const tileSize = 100;
+            const startX = Math.floor(viewport.x / tileSize) * tileSize;
+            const startY = Math.floor(viewport.y / tileSize) * tileSize;
+
+            for (let x = startX; x < viewport.x + viewport.width; x += tileSize) {
+                for (let y = startY; y < viewport.y + viewport.height; y += tileSize) {
+                    const screenX = x - viewport.x;
+                    const screenY = y - viewport.y;
+                    
+                    const isDark = (Math.floor(x / tileSize) + Math.floor(y / tileSize)) % 2 === 0;
+                    ctx.fillStyle = isDark ? '#3b556b' : '#476985'; 
+                    ctx.fillRect(screenX, screenY, tileSize, tileSize);
+                    
+                    ctx.strokeStyle = '#2c3e50'; 
+                    ctx.strokeRect(screenX, screenY, tileSize, tileSize);
+                }
+            }
+            
+            // ترسیم مرزهای نقشه (گرافیک بهتر)
+            ctx.strokeStyle = '#e74c3c'; 
+            ctx.lineWidth = 10;
+            const mapScreenX = 0 - viewport.x;
+            const mapScreenY = 0 - viewport.y;
+            ctx.strokeRect(mapScreenX, mapScreenY, LARGE_MAP_WIDTH, LARGE_MAP_HEIGHT);
+        }
+        
+        function drawPlayer(player, skinImg, gunImg) {
+            const screenX = player.x - viewport.x;
+            const screenY = player.y - viewport.y;
+
+            if (screenX < -PLAYER_SIZE || screenX > viewport.width || screenY < -PLAYER_SIZE || screenY > viewport.height) return;
+
+            const centerX = screenX + player.width / 2;
+            const centerY = screenY + player.height / 2;
+
+            if (player.health > 0) {
+                // ترسیم اسکین
+                ctx.drawImage(skinImg, screenX, screenY, player.width, player.height);
+
+                // ترسیم تفنگ با چرخش
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.rotate(player.angle);
+                // ابعاد تفنگ را بر اساس اسکین تنظیم کنید
+                ctx.drawImage(gunImg, 0, 0 - GUN_OFFSET, gunImage.width / 3, gunImage.height / 3);
+                ctx.restore();
+            } else {
+                // اگر مرده، یک X روی آن بکش
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 5;
+                ctx.beginPath();
+                ctx.moveTo(screenX, screenY);
+                ctx.lineTo(screenX + player.width, screenY + player.height);
+                ctx.moveTo(screenX + player.width, screenY);
+                ctx.lineTo(screenX, screenY + player.height);
+                ctx.stroke();
+            }
+            
+            // ترسیم نوار سلامتی
+            const healthBarWidth = 50;
+            const healthBarHeight = 5;
+            const healthPercent = player.health / 100;
+            
+            ctx.fillStyle = 'black';
+            ctx.fillRect(centerX - healthBarWidth / 2, screenY - 15, healthBarWidth, healthBarHeight);
+            ctx.fillStyle = (player.health > 50) ? '#2ecc71' : (player.health > 20) ? '#f1c40f' : '#e74c3c';
+            ctx.fillRect(centerX - healthBarWidth / 2, screenY - 15, healthBarWidth * healthPercent, healthBarHeight);
+            
+            // ترسیم ID بازیکن
+            ctx.fillStyle = 'white';
+            ctx.font = '10px Tahoma';
+            ctx.fillText(player.id ? player.id.substring(0, 5) : 'You', centerX - 15, screenY - 20);
+        }
+
+        function drawBullets() {
+             ctx.fillStyle = 'yellow';
+             bullets.forEach(bullet => {
+                 const screenX = bullet.x - viewport.x;
+                 const screenY = bullet.y - viewport.y;
+
+                 ctx.beginPath();
+                 ctx.arc(screenX, screenY, 5, 0, Math.PI * 2); 
+                 ctx.fill();
+             });
+        }
+        
+        function gameLoop() {
+            // 1. به‌روزرسانی
+            handleMovement();
+            updateBullets();
+            updateViewport();
+
+            // 2. ترسیم
+            ctx.clearRect(0, 0, viewport.width, viewport.height);
+            drawBackground();
+
+            if (imagesLoaded) {
+                drawBullets();
+
+                // ترسیم تمام بازیکنان
+                for (const id in players) {
+                    drawPlayer(players[id], playerImage, gunImage);
+                }
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+    </script>
+</body>
+</html>
